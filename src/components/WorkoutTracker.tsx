@@ -14,6 +14,8 @@ interface ExerciseData {
 type WorkoutLog = Record<string, ExerciseData[]>;
 
 const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData> => {
+  const apiKey = import.meta.env.PUBLIC_GEMINI_API_KEY;
+
   const prompt = `
     Transforme a "entrada do usuário", que é um treino de academia, em um JSON válido para um gráfico de progressão de carga.
 
@@ -75,7 +77,7 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData>
     `;
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.PUBLIC_GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
