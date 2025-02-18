@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+import { exercises as predefinedExercises } from "../data/exercises"; // Importar exercícios predefinidos
 
 interface SetData {
   reps: number;
@@ -13,7 +14,9 @@ interface ExerciseData {
 
 type WorkoutLog = Record<string, ExerciseData[]>;
 
-const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData> => {
+const normalizeExerciseName = (name: string) => name.toLowerCase();
+
+const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData | { error: string }> => {
   const apiKey = import.meta.env.PUBLIC_GEMINI_API_KEY;
 
   const prompt = `
@@ -49,11 +52,7 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData>
             - Série 3: 10 repetições, 25 kg
 
     3. Caso a entrada tenha um formato diferente, mas contenha os dados necessários, interprete-os corretamente e extraia as informações.
-    4. Se a entrada **não contiver dados suficientes** para gerar um JSON válido, retorne o seguinte formato de erro:
-
-    {
-      "error": "Formato inválido. A entrada deve conter um nome de exercício seguido por séries, repetições e pesos."
-    }
+    4. Se a entrada **não contiver dados suficientes** para gerar um JSON válido, retorne uma mensagem amigável indicando o que está faltando.
 
     ### Formato esperado da saída:
     Se a entrada for válida, retorne apenas um JSON no seguinte formato:
@@ -66,9 +65,12 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData>
       ]
     }
 
+    Se a entrada for inválida, retorne um objeto com a chave "error" e uma mensagem de erro.
+    {error: "Mensagem de erro"}
+
     IMPORTANTE:
     - Aceite variações de formato, desde que contenham os dados necessários.
-    - Se os dados forem insuficientes, retorne o JSON de erro.
+    - Se os dados forem insuficientes, retorne uma mensagem amigável indicando o que está faltando.
     - Se os dados requisitos existirem: Retorne **apenas o JSON válido**, sem explicações.
     - Não envolva a saída em blocos de código (\`\`\`json ... \`\`\`).
 
@@ -89,20 +91,75 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData>
   return data;
 };
 
-const ExerciseInput = ({ value, onChange, onAdd, loading }: { value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; onAdd: () => void; loading: boolean }) => (
-  <div>
-    <input
-      type="text"
-      value={value}
-      onChange={onChange}
-      className="w-full p-2 border rounded"
-      placeholder="Digite o exercício, séries, repetições e peso..."
-    />
-    <button onClick={onAdd} disabled={loading} className="w-full bg-blue-500 text-white p-2 rounded mt-2">
-      {loading ? "Processando..." : "Adicionar Exercício"}
-    </button>
-  </div>
-);
+const ExerciseInput = ({ value, onChange, onAdd, loading, suggestions }: { value: string; onChange: (e: ChangeEvent<HTMLInputElement>) => void; onAdd: () => void; loading: boolean; suggestions: string[] }) => {
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [filteredSuggestions, setFilteredSuggestions] = useState<string[]>([]);
+  const [placeholder, setPlaceholder] = useState<string>("Digite o exercício, séries, repetições e peso...");
+
+  useEffect(() => {
+    if (value.length >= 3) {
+      const filtered = suggestions
+        .filter((suggestion) =>
+          suggestion.toLowerCase().includes(value.toLowerCase())
+        )
+        .sort()
+        .slice(0, 3);
+      setFilteredSuggestions(filtered);
+      setShowSuggestions(filtered.length > 1 || (filtered.length === 1 && filtered[0].toLowerCase() !== value.toLowerCase()));
+    } else {
+      setShowSuggestions(false);
+    }
+  }, [value, suggestions]);
+
+  const handleSuggestionClick = (suggestion: string) => {
+    onChange({ target: { value: suggestion } } as ChangeEvent<HTMLInputElement>);
+    setShowSuggestions(false);
+    setFilteredSuggestions([]);
+    setPlaceholder("Agora, preencha as séries, repetições e peso...");
+  };
+
+  const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
+    onChange(e);
+    const inputValue = e.target.value;
+    const filtered = suggestions
+      .filter((suggestion) =>
+        suggestion.toLowerCase().includes(inputValue.toLowerCase())
+      )
+      .sort()
+      .slice(0, 3);
+    setFilteredSuggestions(filtered);
+    setShowSuggestions(inputValue.length >= 3 && (filtered.length > 1 || (filtered.length === 1 && filtered[0].toLowerCase() !== inputValue.toLowerCase())));
+  };
+
+  return (
+    <div>
+      <input
+        type="text"
+        value={value}
+        onChange={handleChange}
+        className="w-full p-2 border rounded"
+        placeholder={placeholder}
+      />
+      {showSuggestions && filteredSuggestions.length > 0 && (
+        <div className="mt-2">
+          {filteredSuggestions.map((suggestion, index) => (
+            <button
+              key={index}
+              className="w-full p-2 mb-2 bg-gray-200 rounded text-left capitalize"
+              onClick={() => handleSuggestionClick(suggestion)}
+            >
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="text-gray-500 mt-2">{placeholder}</p>
+      <button onClick={onAdd} disabled={loading} className="w-full bg-blue-500 text-white p-2 rounded mt-2">
+        {loading ? "Processando..." : "Adicionar Exercício"}
+      </button>
+    </div>
+  );
+};
 
 const ExerciseSelect = ({ exercises, onSelect }: { exercises: string[]; onSelect: (e: ChangeEvent<HTMLSelectElement>) => void }) => (
   <select className="w-full p-2 border rounded mb-4" onChange={onSelect}>
@@ -147,38 +204,42 @@ export default function WorkoutTracker() {
 
     setLoading(true);
     try {
-      const formattedExercise = await fetchGeminiResponse(exerciseInput);
+      const response = await fetchGeminiResponse(exerciseInput);
 
-      if (!formattedExercise.exercise || !formattedExercise.sets) throw new Error("Resposta inválida do Gemini");
+      if ('error' in response) {
+        setGeminiResponse(response.error);
+      } else {
+        const formattedExercise = response;
 
-      setWorkoutData((prev) => {
-        const updatedExercises = [...(prev[today] || [])];
-        const existingExerciseIndex = updatedExercises.findIndex((ex) => ex.exercise === formattedExercise.exercise);
+        setWorkoutData((prev) => {
+          const updatedExercises = [...(prev[today] || [])];
+          const existingExerciseIndex = updatedExercises.findIndex((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise));
 
-        if (existingExerciseIndex !== -1) {
-          updatedExercises[existingExerciseIndex].sets.push(...formattedExercise.sets);
-        } else {
-          updatedExercises.push(formattedExercise);
-        }
+          if (existingExerciseIndex !== -1) {
+            updatedExercises[existingExerciseIndex].sets.push(...formattedExercise.sets);
+          } else {
+            updatedExercises.push(formattedExercise);
+          }
 
-        const updatedData = { ...prev, [today]: updatedExercises };
-        localStorage.setItem("workoutLogs", JSON.stringify(updatedData));
-        return updatedData;
-      });
+          const updatedData = { ...prev, [today]: updatedExercises };
+          localStorage.setItem("workoutLogs", JSON.stringify(updatedData));
+          return updatedData;
+        });
 
-      setGeminiResponse("Treino registrado com sucesso!");
+        setGeminiResponse("Treino registrado com sucesso!");
+      }
     } catch (error) {
       console.error("Erro ao conectar com a API Gemini:", error);
-      setGeminiResponse("Erro ao interpretar os dados. Verifique o formato e tente novamente.");
+      setGeminiResponse(`Erro ao interpretar os dados: ${error.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   const chartData = Object.entries(workoutData)
-    .filter(([_, exercises]) => exercises.some((ex) => ex.exercise === selectedExercise))
+    .filter(([_, exercises]) => exercises.some((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise)))
     .map(([date, exercises]) => {
-      const exerciseData = exercises.filter((ex) => ex.exercise === selectedExercise);
+      const exerciseData = exercises.filter((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise));
       let totalVolume = 0, totalReps = 0, maxLoad = 0;
 
       exerciseData.forEach((ex) => {
@@ -193,6 +254,13 @@ export default function WorkoutTracker() {
       return { day: date, totalVolume, averageLoad, maxLoad };
     });
 
+  const exerciseSuggestions = [
+    ...new Set([
+      ...Object.values(workoutData).flat().map((ex) => normalizeExerciseName(ex.exercise)),
+      ...predefinedExercises.flatMap((group) => group.exercises.map(normalizeExerciseName))
+    ])
+  ];
+
   return (
     <div className="p-4 bg-gray-100 rounded-md shadow-md max-w-xl mx-auto">
       <h2 className="text-center text-xl font-bold mb-4">Registro de Treino</h2>
@@ -201,11 +269,12 @@ export default function WorkoutTracker() {
         onChange={(e) => setExerciseInput(e.target.value)}
         onAdd={addExercise}
         loading={loading}
+        suggestions={exerciseSuggestions}
       />
       {geminiResponse && <p className="mt-4 text-gray-700">{geminiResponse}</p>}
       <h3 className="text-center text-lg font-bold mt-6">Progresso</h3>
       <ExerciseSelect
-        exercises={Object.values(workoutData).flat().map((ex) => ex.exercise)}
+        exercises={Object.values(workoutData).flat().map((ex) => normalizeExerciseName(ex.exercise))}
         onSelect={(e) => setSelectedExercise(e.target.value)}
       />
       {selectedExercise && chartData.length > 0 && <ExerciseChart data={chartData} />}
