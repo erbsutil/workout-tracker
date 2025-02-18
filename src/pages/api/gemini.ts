@@ -8,7 +8,7 @@ export async function POST({ request }: { request: Request }) {
       return new Response(JSON.stringify({ error: "Prompt inválido ou não fornecido" }), { status: 400 });
     }
 
-    const apiKey = import.meta.env.GEMINI_API_KEY; // Pegando a chave do .env
+    const apiKey = import.meta.env.GEMINI_API_KEY;
     const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(geminiApiUrl, {

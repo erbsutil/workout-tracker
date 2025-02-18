@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { exercises as predefinedExercises } from "../data/exercises"; // Importar exercícios predefinidos
+import { db, signInAnonymouslyToFirebase } from "../firebaseConfig";
+import { collection, addDoc, getDocs, query, where, doc, setDoc } from "firebase/firestore";
+import { onAuthStateChanged } from "firebase/auth";
 
 interface SetData {
   reps: number;
@@ -10,6 +13,7 @@ interface SetData {
 interface ExerciseData {
   exercise: string;
   sets: SetData[];
+  category: string;
 }
 
 type WorkoutLog = Record<string, ExerciseData[]>;
@@ -17,8 +21,6 @@ type WorkoutLog = Record<string, ExerciseData[]>;
 const normalizeExerciseName = (name: string) => name.toLowerCase();
 
 const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData | { error: string }> => {
-  const apiKey = import.meta.env.PUBLIC_GEMINI_API_KEY;
-
   const prompt = `
     Transforme a "entrada do usuário", que é um treino de academia, em um JSON válido para um gráfico de progressão de carga.
 
@@ -27,6 +29,7 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData 
     - Número de séries
     - Repetições por série
     - Pesos utilizados
+    - Categoria do exercício
 
     ### Regras para interpretação da entrada:
     1. A entrada pode ter diferentes formatos, mas deve conter um nome de exercício seguido por séries, repetições e pesos.
@@ -63,7 +66,7 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData 
         { "reps": número, "weight": número },
         { "reps": número, "weight": número }
       ],
-      category: "Categoria do exercício"
+      "category": "Categoria do Exercício"
     }
 
     Se a entrada for inválida, retorne um objeto com a chave "error" e uma mensagem de erro.
@@ -73,9 +76,8 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData 
     - Aceite variações de formato, desde que contenham os dados necessários.
     - Se os dados forem insuficientes, retorne uma mensagem amigável indicando o que está faltando.
     - Se os dados requisitos existirem: Retorne **apenas o JSON válido**, sem explicações.
-    - A IA deve fornecer a categoria do exercício de acordo com o nome do mesmo, em category.
     - Não envolva a saída em blocos de código (\`\`\`json ... \`\`\`).
-
+    - em category a IA deve fornecer a categoria de acordo com o nome do exercício.
     Entrada do usuário:
     "${exerciseInput}"
     `;
@@ -195,17 +197,40 @@ export default function WorkoutTracker() {
   const [selectedExercise, setSelectedExercise] = useState<string>("");
   const [geminiResponse, setGeminiResponse] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
+  const [userId, setUserId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const today = new Date().toISOString().split("T")[0];
 
   useEffect(() => {
-    const storedData = localStorage.getItem("workoutLogs");
-    if (storedData) setWorkoutData(JSON.parse(storedData) as WorkoutLog);
+    const fetchWorkoutData = async (userId: string) => {
+      const q = query(collection(db, "users", userId, "workouts"));
+      const querySnapshot = await getDocs(q);
+      const data: WorkoutLog = {};
+      querySnapshot.forEach((doc) => {
+        const docData = doc.data() as ExerciseData;
+        const date = docData.date;
+        if (!data[date]) {
+          data[date] = [];
+        }
+        data[date].push(docData);
+      });
+      setWorkoutData(data);
+    };
+
+    const authenticateUser = async () => {
+      const user = await signInAnonymouslyToFirebase();
+      if (user) {
+        setUserId(user.uid);
+        fetchWorkoutData(user.uid);
+      }
+    };
+
+    authenticateUser();
   }, []);
 
   const addExercise = async () => {
-    if (!exerciseInput.trim()) return;
+    if (!exerciseInput.trim() || !userId) return;
 
     setLoading(true);
     try {
@@ -216,23 +241,29 @@ export default function WorkoutTracker() {
       } else {
         const formattedExercise = response;
 
+        const userDocRef = doc(db, "users", userId);
+        const workoutCollectionRef = collection(userDocRef, "workouts");
+
+        await addDoc(workoutCollectionRef, {
+          date: today,
+          ...formattedExercise
+        });
+
         setWorkoutData((prev) => {
           const updatedExercises = [...(prev[today] || [])];
           const existingExerciseIndex = updatedExercises.findIndex(
             (ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise)
           );
-        
+
           if (existingExerciseIndex !== -1) {
             updatedExercises[existingExerciseIndex].sets.push(...formattedExercise.sets);
           } else {
             updatedExercises.push({ ...formattedExercise, category: formattedExercise.category });
           }
-        
+
           const updatedData = { ...prev, [today]: updatedExercises };
-          localStorage.setItem("workoutLogs", JSON.stringify(updatedData));
           return updatedData;
         });
-        
 
         setGeminiResponse("Treino registrado com sucesso!");
       }
