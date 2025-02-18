@@ -62,7 +62,8 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData 
       "sets": [
         { "reps": número, "weight": número },
         { "reps": número, "weight": número }
-      ]
+      ],
+      category: "Categoria do exercício"
     }
 
     Se a entrada for inválida, retorne um objeto com a chave "error" e uma mensagem de erro.
@@ -72,6 +73,7 @@ const fetchGeminiResponse = async (exerciseInput: string): Promise<ExerciseData 
     - Aceite variações de formato, desde que contenham os dados necessários.
     - Se os dados forem insuficientes, retorne uma mensagem amigável indicando o que está faltando.
     - Se os dados requisitos existirem: Retorne **apenas o JSON válido**, sem explicações.
+    - A IA deve fornecer a categoria do exercício de acordo com o nome do mesmo, em category.
     - Não envolva a saída em blocos de código (\`\`\`json ... \`\`\`).
 
     Entrada do usuário:
@@ -216,18 +218,21 @@ export default function WorkoutTracker() {
 
         setWorkoutData((prev) => {
           const updatedExercises = [...(prev[today] || [])];
-          const existingExerciseIndex = updatedExercises.findIndex((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise));
-
+          const existingExerciseIndex = updatedExercises.findIndex(
+            (ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise)
+          );
+        
           if (existingExerciseIndex !== -1) {
             updatedExercises[existingExerciseIndex].sets.push(...formattedExercise.sets);
           } else {
-            updatedExercises.push(formattedExercise);
+            updatedExercises.push({ ...formattedExercise, category: formattedExercise.category });
           }
-
+        
           const updatedData = { ...prev, [today]: updatedExercises };
           localStorage.setItem("workoutLogs", JSON.stringify(updatedData));
           return updatedData;
         });
+        
 
         setGeminiResponse("Treino registrado com sucesso!");
       }
