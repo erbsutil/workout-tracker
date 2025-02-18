@@ -24,8 +24,6 @@ export async function POST({ request }: { request: Request }) {
     const data = await response.json();
     const rawContent = data.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/```json|```/g, "").trim();
 
-    console.log("data", rawContent);
-
     if (!rawContent) {
       throw new Error("Resposta inválida do Gemini");
     }
