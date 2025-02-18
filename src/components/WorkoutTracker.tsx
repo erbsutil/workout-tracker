@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { exercises as predefinedExercises } from "../data/exercises"; // Importar exercícios predefinidos
 import { db, signInAnonymouslyToFirebase } from "../firebaseConfig";
-import { collection, addDoc, getDocs, query, where, doc, setDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where, doc, updateDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 
 interface SetData {
@@ -177,14 +177,13 @@ const ExerciseSelect = ({ exercises, onSelect }: { exercises: string[]; onSelect
   </select>
 );
 
-const ExerciseChart = ({ data }: { data: { day: string; totalVolume: number; averageLoad: number; maxLoad: number }[] }) => (
+const ExerciseChart = ({ data }: { data: { day: string; averageLoad: number; maxLoad: number }[] }) => (
   <div className="bg-white p-4 rounded-md">
     <LineChart width={400} height={250} data={data}>
       <XAxis dataKey="day" />
       <YAxis />
       <Tooltip />
       <CartesianGrid stroke="#ccc" />
-      <Line type="monotone" dataKey="totalVolume" stroke="#ff7300" name="Carga Total" />
       <Line type="monotone" dataKey="averageLoad" stroke="#387908" name="Peso Médio" />
       <Line type="monotone" dataKey="maxLoad" stroke="#8884d8" name="Maior Carga" />
     </LineChart>
@@ -244,26 +243,43 @@ export default function WorkoutTracker() {
         const userDocRef = doc(db, "users", userId);
         const workoutCollectionRef = collection(userDocRef, "workouts");
 
-        await addDoc(workoutCollectionRef, {
-          date: today,
-          ...formattedExercise
-        });
+        const q = query(workoutCollectionRef, where("date", "==", today), where("exercise", "==", formattedExercise.exercise));
+        const querySnapshot = await getDocs(q);
 
-        setWorkoutData((prev) => {
-          const updatedExercises = [...(prev[today] || [])];
-          const existingExerciseIndex = updatedExercises.findIndex(
-            (ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise)
-          );
+        if (!querySnapshot.empty) {
+          // Se o exercício já existe, atualize-o com as novas séries
+          const existingDoc = querySnapshot.docs[0];
+          const existingData = existingDoc.data() as ExerciseData;
+          const updatedSets = [...existingData.sets, ...formattedExercise.sets];
 
-          if (existingExerciseIndex !== -1) {
-            updatedExercises[existingExerciseIndex].sets.push(...formattedExercise.sets);
-          } else {
-            updatedExercises.push({ ...formattedExercise, category: formattedExercise.category });
-          }
+          await updateDoc(existingDoc.ref, { sets: updatedSets });
 
-          const updatedData = { ...prev, [today]: updatedExercises };
-          return updatedData;
-        });
+          setWorkoutData((prev) => {
+            const updatedExercises = [...(prev[today] || [])];
+            const existingExerciseIndex = updatedExercises.findIndex(
+              (ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(formattedExercise.exercise)
+            );
+
+            if (existingExerciseIndex !== -1) {
+              updatedExercises[existingExerciseIndex].sets = updatedSets;
+            }
+
+            const updatedData = { ...prev, [today]: updatedExercises };
+            return updatedData;
+          });
+        } else {
+          // Se o exercício não existe, adicione-o
+          await addDoc(workoutCollectionRef, {
+            date: today,
+            ...formattedExercise
+          });
+
+          setWorkoutData((prev) => {
+            const updatedExercises = [...(prev[today] || []), formattedExercise];
+            const updatedData = { ...prev, [today]: updatedExercises };
+            return updatedData;
+          });
+        }
 
         setGeminiResponse("Treino registrado com sucesso!");
       }
@@ -276,22 +292,22 @@ export default function WorkoutTracker() {
   };
 
   const chartData = Object.entries(workoutData)
-    .filter(([_, exercises]) => exercises.some((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise)))
-    .map(([date, exercises]) => {
-      const exerciseData = exercises.filter((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise));
-      let totalVolume = 0, totalReps = 0, maxLoad = 0;
+  .filter(([_, exercises]) => exercises.some((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise)))
+  .map(([date, exercises]) => {
+    const exerciseData = exercises.filter((ex) => normalizeExerciseName(ex.exercise) === normalizeExerciseName(selectedExercise));
+    let totalVolume = 0, totalReps = 0, maxLoad = 0;
 
-      exerciseData.forEach((ex) => {
-        ex.sets.forEach((set) => {
-          totalVolume += set.reps * set.weight;
-          totalReps += set.reps;
-          if (set.weight > maxLoad) maxLoad = set.weight;
-        });
+    exerciseData.forEach((ex) => {
+      ex.sets.forEach((set) => {
+        totalVolume += set.reps * set.weight;
+        totalReps += set.reps;
+        if (set.weight > maxLoad) maxLoad = set.weight;
       });
-
-      const averageLoad = totalReps > 0 ? totalVolume / totalReps : 0;
-      return { day: date, totalVolume, averageLoad, maxLoad };
     });
+
+    const averageLoad = totalReps > 0 ? totalVolume / totalReps : 0;
+    return { day: date, averageLoad, maxLoad };
+  });
 
   const exerciseSuggestions = [
     ...new Set([
@@ -302,21 +318,21 @@ export default function WorkoutTracker() {
 
   return (
     <div className="p-4 bg-gray-100 rounded-md shadow-md max-w-xl mx-auto">
-      <h2 className="text-center text-xl font-bold mb-4">Registro de Treino</h2>
-      <ExerciseInput
-        value={exerciseInput}
-        onChange={(e) => setExerciseInput(e.target.value)}
-        onAdd={addExercise}
-        loading={loading}
-        suggestions={exerciseSuggestions}
-      />
-      {geminiResponse && <p className="mt-4 text-gray-700">{geminiResponse}</p>}
-      <h3 className="text-center text-lg font-bold mt-6">Progresso</h3>
-      <ExerciseSelect
-        exercises={Object.values(workoutData).flat().map((ex) => normalizeExerciseName(ex.exercise))}
-        onSelect={(e) => setSelectedExercise(e.target.value)}
-      />
-      {selectedExercise && chartData.length > 0 && <ExerciseChart data={chartData} />}
-    </div>
+    <h2 className="text-center text-xl font-bold mb-4">Registro de Treino</h2>
+    <ExerciseInput
+      value={exerciseInput}
+      onChange={(e) => setExerciseInput(e.target.value)}
+      onAdd={addExercise}
+      loading={loading}
+      suggestions={exerciseSuggestions}
+    />
+    {geminiResponse && <p className="mt-4 text-gray-700">{geminiResponse}</p>}
+    <h3 className="text-center text-lg font-bold mt-6">Progresso</h3>
+    <ExerciseSelect
+      exercises={Object.values(workoutData).flat().map((ex) => normalizeExerciseName(ex.exercise))}
+      onSelect={(e) => setSelectedExercise(e.target.value)}
+    />
+    {selectedExercise && chartData.length > 0 && <ExerciseChart data={chartData} />}
+  </div>
   );
 }
