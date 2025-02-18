@@ -95,6 +95,7 @@ const ExerciseInput = ({ value, onChange, onAdd, loading, suggestions }: { value
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredSuggestions, setFilteredSuggestions] = useState<string[]>([]);
   const [placeholder, setPlaceholder] = useState<string>("Digite o exercício, séries, repetições e peso...");
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (value.length >= 3) {
@@ -112,10 +113,11 @@ const ExerciseInput = ({ value, onChange, onAdd, loading, suggestions }: { value
   }, [value, suggestions]);
 
   const handleSuggestionClick = (suggestion: string) => {
-    onChange({ target: { value: suggestion } } as ChangeEvent<HTMLInputElement>);
+    onChange({ target: { value: suggestion + " " } } as ChangeEvent<HTMLInputElement>);
     setShowSuggestions(false);
     setFilteredSuggestions([]);
     setPlaceholder("Agora, preencha as séries, repetições e peso...");
+    inputRef.current?.focus();
   };
 
   const handleChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -139,6 +141,7 @@ const ExerciseInput = ({ value, onChange, onAdd, loading, suggestions }: { value
         onChange={handleChange}
         className="w-full p-2 border rounded"
         placeholder={placeholder}
+        ref={inputRef}
       />
       {showSuggestions && filteredSuggestions.length > 0 && (
         <div className="mt-2">
