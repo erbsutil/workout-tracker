@@ -165,41 +165,60 @@ const LastSets = ({ workoutData, setWorkoutData, userId }: {
 
   const deleteSet = async (docId: string, timestamp: string) => {
     if (!userId) return;
-
+  
     const userDocRef = doc(db, "users", userId);
     const workoutDocRef = doc(userDocRef, "workouts", docId);
     const workoutDoc = await getDoc(workoutDocRef);
-
+  
     if (!workoutDoc.exists()) return;
-
+  
     const workoutData = workoutDoc.data() as ExerciseData;
-
-    // Filtra os sets para remover apenas aquele com o timestamp correspondente
-    const updatedSets = workoutData.sets.filter(set => set.timestamp !== timestamp);
-
+  
+    // **Remove APENAS um set, mesmo que existam múltiplos com o mesmo timestamp**
+    let removed = false;
+    const updatedSets = workoutData.sets.filter(set => {
+      if (!removed && set.timestamp === timestamp) {
+        removed = true; // Apenas UM set será removido
+        return false;
+      }
+      return true;
+    });
+  
     if (updatedSets.length > 0) {
       await updateDoc(workoutDocRef, { sets: updatedSets });
     } else {
       await deleteDoc(workoutDocRef);
     }
-
-    // Atualiza workoutData para refletir a remoção
+  
+    // **Atualiza workoutData para refletir a remoção do set correto**
     setWorkoutData(prev => {
       const updatedWorkoutData = { ...prev };
-
+  
       if (updatedWorkoutData[workoutData.date]) {
         updatedWorkoutData[workoutData.date] = updatedWorkoutData[workoutData.date]
-          .map(exercise =>
-            exercise.docId === docId ? { ...exercise, sets: updatedSets } : exercise
-          )
-          .filter(exercise => exercise.sets.length > 0);
+          .map(exercise => {
+            if (exercise.docId === docId) {
+              return { ...exercise, sets: updatedSets };
+            }
+            return exercise;
+          })
+          .filter(exercise => exercise.sets.length > 0); // Remove exercícios sem sets
       }
-
+  
       return updatedWorkoutData;
     });
-
-    // Atualizar a lista de últimos sets
-    setLastSets(prev => prev.filter(set => set.set.timestamp !== timestamp));
+  
+    // **Atualiza lastSets para remover apenas UM set**
+    setLastSets(prev => {
+      let found = false;
+      return prev.filter(set => {
+        if (!found && set.docId === docId && set.set.timestamp === timestamp) {
+          found = true; // Apenas o primeiro encontrado será removido
+          return false;
+        }
+        return true;
+      });
+    });
   };
 
   return (
@@ -210,7 +229,7 @@ const LastSets = ({ workoutData, setWorkoutData, userId }: {
           <div>
             <p>{item.date} - {item.exercise}</p>
             <p>Reps: {item.set.reps}, Peso: {item.set.weight} kg</p>
-            <p>Adicionado em: {new Date(item.set.timestamp.split('-')[0]).toLocaleString()}</p>
+            <p>Adicionado em: {new Date(item.set.timestamp).toLocaleString()}</p>
           </div>
           <button
             onClick={() => deleteSet(item.docId, item.set.timestamp)}
@@ -276,9 +295,9 @@ export default function WorkoutTracker() {
         const timestamp = new Date().toISOString(); // Obter data e hora atual
 
         // Adicionar timestamp a cada set
-        formattedExercise.sets = formattedExercise.sets.map((set, index) => ({
+        formattedExercise.sets = formattedExercise.sets.map((set) => ({
           ...set,
-          timestamp: `${new Date().toISOString()}-${index}` // Adiciona um índice ao timestamp
+          timestamp: new Date().toISOString() // Adiciona o timestamp
         }));
 
         const userDocRef = doc(db, "users", userId);
