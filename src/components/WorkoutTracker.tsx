@@ -82,16 +82,29 @@ const ExerciseInput = ({ value, onChange, onAdd, loading, suggestions }: { value
     setShowSuggestions(inputValue.length >= 3 && (filtered.length > 1 || (filtered.length === 1 && filtered[0].toLowerCase() !== inputValue.toLowerCase())));
   };
 
+  const handleClear = () => {
+    onChange({ target: { value: "" } } as ChangeEvent<HTMLInputElement>);
+    setFilteredSuggestions([]);
+    setShowSuggestions(false);
+    setPlaceholder("Digite o exercício, séries, repetições e peso...");
+    inputRef.current?.focus();
+  };
+
   return (
     <div>
-      <input
-        type="text"
-        value={value}
-        onChange={handleChange}
-        className="w-full p-2 border rounded"
-        placeholder={placeholder}
-        ref={inputRef}
-      />
+      <div className="flex items-center mb-2">
+        <input
+          type="text"
+          value={value}
+          onChange={handleChange}
+          className="w-full p-2 border rounded"
+          placeholder={placeholder}
+          ref={inputRef}
+        />
+        <button onClick={handleClear} className="ml-2 bg-gray-500 text-white p-2 rounded">
+          Limpar
+        </button>
+      </div>
       {showSuggestions && filteredSuggestions.length > 0 && (
         <div className="mt-2">
           {filteredSuggestions.map((suggestion, index) => (
@@ -400,14 +413,19 @@ export default function WorkoutTracker() {
       loading={loading}
       suggestions={exerciseSuggestions}
     />
+
     {geminiResponse && <p className="mt-4 text-gray-700">{geminiResponse}</p>}
+
+    <LastSets workoutData={workoutData} setWorkoutData={setWorkoutData} userId={userId} />
+
     <h3 className="text-center text-lg font-bold mt-6">Progresso</h3>
+
     <ExerciseSelect
       exercises={Object.values(workoutData).flat().map((ex) => normalizeExerciseName(ex.exercise))}
       onSelect={(e) => setSelectedExercise(e.target.value)}
     />
+
     {selectedExercise && chartData.length > 0 && <ExerciseChart data={chartData} />}
-    <LastSets workoutData={workoutData} setWorkoutData={setWorkoutData} userId={userId} />
   </div>
   );
 }
