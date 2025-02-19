@@ -2,19 +2,22 @@ import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { exercises as predefinedExercises } from "../data/exercises"; // Importar exercícios predefinidos
 import { db, signInAnonymouslyToFirebase } from "../firebaseConfig";
-import { collection, addDoc, getDocs, query, where, doc, updateDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, query, where, doc, updateDoc, deleteDoc, getDoc } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import { geminiPrompt } from "../prompts/geminiPrompt"; // Import the prompt
 
 interface SetData {
   reps: number;
   weight: number;
+  timestamp: string; // Adicionar campo de data e hora
 }
 
 interface ExerciseData {
   exercise: string;
   sets: SetData[];
   category: string;
+  date: string;
+  docId?: string;
 }
 
 type WorkoutLog = Record<string, ExerciseData[]>;
@@ -133,6 +136,94 @@ const ExerciseChart = ({ data }: { data: { day: string; averageLoad: number; max
   </div>
 );
 
+const LastSets = ({ workoutData, setWorkoutData, userId }: { 
+  workoutData: WorkoutLog; 
+  setWorkoutData: React.Dispatch<React.SetStateAction<WorkoutLog>>; 
+  userId: string | null 
+}) => {
+  const [lastSets, setLastSets] = useState<{ date: string; exercise: string; set: SetData; docId: string }[]>([]);
+
+  useEffect(() => {
+    const updateLastSets = () => {
+      const sets: { date: string; exercise: string; set: SetData; docId: string }[] = [];
+      Object.values(workoutData).forEach(exercises => {
+        exercises.forEach(exercise => {
+          exercise.sets.forEach(set => {
+            sets.push({ date: exercise.date, exercise: exercise.exercise, set, docId: exercise.docId });
+          });
+        });
+      });
+
+      // Ordenar sets por timestamp em ordem decrescente
+      sets.sort((a, b) => new Date(b.set.timestamp).getTime() - new Date(a.set.timestamp).getTime());
+
+      setLastSets(sets.slice(0, 3)); // Garantir que apenas os últimos 3 sets únicos sejam exibidos
+    };
+
+    updateLastSets();
+  }, [workoutData]);
+
+  const deleteSet = async (docId: string, timestamp: string) => {
+    if (!userId) return;
+
+    const userDocRef = doc(db, "users", userId);
+    const workoutDocRef = doc(userDocRef, "workouts", docId);
+    const workoutDoc = await getDoc(workoutDocRef);
+
+    if (!workoutDoc.exists()) return;
+
+    const workoutData = workoutDoc.data() as ExerciseData;
+
+    // Filtra os sets para remover apenas aquele com o timestamp correspondente
+    const updatedSets = workoutData.sets.filter(set => set.timestamp !== timestamp);
+
+    if (updatedSets.length > 0) {
+      await updateDoc(workoutDocRef, { sets: updatedSets });
+    } else {
+      await deleteDoc(workoutDocRef);
+    }
+
+    // Atualiza workoutData para refletir a remoção
+    setWorkoutData(prev => {
+      const updatedWorkoutData = { ...prev };
+
+      if (updatedWorkoutData[workoutData.date]) {
+        updatedWorkoutData[workoutData.date] = updatedWorkoutData[workoutData.date]
+          .map(exercise =>
+            exercise.docId === docId ? { ...exercise, sets: updatedSets } : exercise
+          )
+          .filter(exercise => exercise.sets.length > 0);
+      }
+
+      return updatedWorkoutData;
+    });
+
+    // Atualizar a lista de últimos sets
+    setLastSets(prev => prev.filter(set => set.set.timestamp !== timestamp));
+  };
+
+  return (
+    <div className="mt-4">
+      <h3 className="text-center text-lg font-bold">Últimos 3 Sets</h3>
+      {lastSets.map((item, index) => (
+        <div key={index} className="flex justify-between items-center bg-gray-200 p-2 rounded mb-2">
+          <div>
+            <p>{item.date} - {item.exercise}</p>
+            <p>Reps: {item.set.reps}, Peso: {item.set.weight} kg</p>
+            <p>Adicionado em: {new Date(item.set.timestamp.split('-')[0]).toLocaleString()}</p>
+          </div>
+          <button
+            onClick={() => deleteSet(item.docId, item.set.timestamp)}
+            className="bg-red-500 text-white p-1 rounded"
+          >
+            Deletar
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+};
+
 export default function WorkoutTracker() {
   const [exerciseInput, setExerciseInput] = useState<string>("");
   const [workoutData, setWorkoutData] = useState<WorkoutLog>({});
@@ -142,7 +233,7 @@ export default function WorkoutTracker() {
   const [userId, setUserId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toLocaleDateString('en-CA'); // Ajuste para considerar o fuso horário local
 
   useEffect(() => {
     const fetchWorkoutData = async (userId: string) => {
@@ -155,7 +246,7 @@ export default function WorkoutTracker() {
         if (!data[date]) {
           data[date] = [];
         }
-        data[date].push(docData);
+        data[date].push({ ...docData, docId: doc.id });
       });
       setWorkoutData(data);
     };
@@ -182,6 +273,13 @@ export default function WorkoutTracker() {
         setGeminiResponse(response.error);
       } else {
         const formattedExercise = response;
+        const timestamp = new Date().toISOString(); // Obter data e hora atual
+
+        // Adicionar timestamp a cada set
+        formattedExercise.sets = formattedExercise.sets.map((set, index) => ({
+          ...set,
+          timestamp: `${new Date().toISOString()}-${index}` // Adiciona um índice ao timestamp
+        }));
 
         const userDocRef = doc(db, "users", userId);
         const workoutCollectionRef = collection(userDocRef, "workouts");
@@ -212,17 +310,31 @@ export default function WorkoutTracker() {
           });
         } else {
           // Se o exercício não existe, adicione-o
-          await addDoc(workoutCollectionRef, {
+          const docRef = await addDoc(workoutCollectionRef, {
             date: today,
             ...formattedExercise
           });
 
           setWorkoutData((prev) => {
-            const updatedExercises = [...(prev[today] || []), formattedExercise];
+            const updatedExercises = [...(prev[today] || []), { ...formattedExercise, docId: docRef.id }];
             const updatedData = { ...prev, [today]: updatedExercises };
             return updatedData;
           });
         }
+
+        // Atualizar os últimos 3 sets após adicionar um novo exercício
+        const qLastSets = query(collection(db, "users", userId, "workouts"));
+        const querySnapshotLastSets = await getDocs(qLastSets);
+        const dataLastSets: WorkoutLog = {};
+        querySnapshotLastSets.forEach((doc) => {
+          const docData = doc.data() as ExerciseData;
+          const date = docData.date;
+          if (!dataLastSets[date]) {
+            dataLastSets[date] = [];
+          }
+          dataLastSets[date].push({ ...docData, docId: doc.id });
+        });
+        setWorkoutData(dataLastSets);
 
         setGeminiResponse("Treino registrado com sucesso!");
       }
@@ -276,6 +388,7 @@ export default function WorkoutTracker() {
       onSelect={(e) => setSelectedExercise(e.target.value)}
     />
     {selectedExercise && chartData.length > 0 && <ExerciseChart data={chartData} />}
+    <LastSets workoutData={workoutData} setWorkoutData={setWorkoutData} userId={userId} />
   </div>
   );
 }
